@@ -111,7 +111,8 @@ val = plot_df['总泡沫指数'].iloc[-1]
 # 加个双保险，防止数据只有1天导致拿不到昨天(-2)的数据
 delta = val - plot_df['总泡沫指数'].iloc[-2] if len(plot_df) > 1 else 0
 
-col1, col2, col3 = st.columns(3)
+# 🚀 优化布局比例：左(1) 中(2) 右(1)，给中间的状态评级留出双倍空间
+col1, col2, col3 = st.columns([1, 2, 1])
 col1.metric("🚨 美投 AI 泡沫指数", f"{val:.1f}", f"{delta:.2f}", delta_color="inverse")
 
 # 🚀 全新阶梯网格预警逻辑
