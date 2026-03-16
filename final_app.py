@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 # 网页全局配置
 st.set_page_config(page_title="AI泡沫指数终极看板", page_icon="📈", layout="wide")
 
-st.title("🛡️ 私人量化终端：美投 AI 泡沫综合指数 (V2.0 全交互最终版)")
+st.title("🛡️ 私人量化终端：美投 AI 泡沫综合指数 (V2.1 最终修正版)")
 st.markdown("---")
 
 
@@ -74,6 +74,9 @@ def fetch_and_calculate():
     # ==========================================
     total_index = (sentiment_index * 2 + capital_index * 1) / 3
     total_smoothed = total_index.rolling(10).mean()
+    
+    # 🚀 最终修正魔法：解决整体低估风险，曲线上移 15，并锁定上限 100 下限 0
+    total_smoothed = (total_smoothed + 15).clip(lower=0, upper=100)
 
     df = pd.DataFrame({
         '总泡沫指数': total_smoothed,
