@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 # 网页全局配置
 st.set_page_config(page_title="AI泡沫指数终极看板", page_icon="📈", layout="wide")
 
-st.title("🛡️ 私人量化终端：美投 AI 泡沫综合指数 (V2.1 最终修正版)")
+st.title("🛡️ 私人量化终端：美投 AI 泡沫综合指数 (V2.2 阶梯网格定投版)")
 st.markdown("---")
 
 
@@ -114,51 +114,73 @@ delta = val - plot_df['总泡沫指数'].iloc[-2] if len(plot_df) > 1 else 0
 col1, col2, col3 = st.columns(3)
 col1.metric("🚨 美投 AI 泡沫指数", f"{val:.1f}", f"{delta:.2f}", delta_color="inverse")
 
-# 警戒线升级到 85
-if val >= 85:
-    status, color = "极度危险 (超越警戒线)", "🔴"
-elif val >= 65:
-    status, color = "偏高 (需警惕回调)", "🟠"
+# 🚀 全新阶梯网格预警逻辑
+if val >= 90:
+    status, color = "极度危险 (高度警戒/清仓)", "🚨"
+elif val >= 80:
+    status, color = "高风险区 (建议逐步减仓)", "🔴"
+elif val >= 70:
+    status, color = "偏高区域 (暂停定投/观望)", "🟠"
 elif val >= 40:
-    status, color = "中性 (健康状态)", "🟡"
+    status, color = "中性震荡 (持有/观望状态)", "🟡"
+elif val >= 30:
+    status, color = "偏低区域 (推荐开启定投)", "🟢"
+elif val >= 20:
+    status, color = "恐慌底部 (建议加大定投)", "🟩"
 else:
-    status, color = "恐慌底部 (黄金坑)", "🟢"
+    status, color = "史诗级大底 (黄金坑/梭哈)", "💎"
 
 col2.metric("📊 市场状态评级", f"{color} {status}")
 col3.metric("📅 最新更新日期", plot_df.index[-1].strftime('%Y-%m-%d'))
 
-st.subheader("🌐 综合指数走势 (警戒线: 85)")
+st.subheader("🌐 综合指数走势 (战术网格全景)")
 
-# --- 使用 Plotly 构建全交互式主图 ---
+# --- 使用 Plotly 构建全交互式阶梯网格图 ---
 fig_main = go.Figure()
 
-# 1. 绘制主线
+# 1. 绘制多区间警报背景色 (透明度非常柔和，避免遮挡曲线)
+# 危险区
+fig_main.add_hrect(y0=90, y1=100, line_width=0, fillcolor="#FF0000", opacity=0.15)
+fig_main.add_hrect(y0=80, y1=90, line_width=0, fillcolor="#FF4500", opacity=0.1)
+fig_main.add_hrect(y0=70, y1=80, line_width=0, fillcolor="#FFA500", opacity=0.08)
+
+# 机会区
+fig_main.add_hrect(y0=30, y1=40, line_width=0, fillcolor="#90EE90", opacity=0.1)
+fig_main.add_hrect(y0=20, y1=30, line_width=0, fillcolor="#32CD32", opacity=0.15)
+fig_main.add_hrect(y0=0, y1=20, line_width=0, fillcolor="#006400", opacity=0.2)
+
+# 2. 绘制各级战术水位线及标签
+# 卖出防线
+fig_main.add_hline(y=90, line_dash="solid", line_color="red", line_width=1.5, annotation_text="清仓线 (90)", annotation_position="top left", annotation_font_color="red")
+fig_main.add_hline(y=80, line_dash="dash", line_color="#FF4500", line_width=1.5, annotation_text="减仓线 (80)", annotation_position="top left", annotation_font_color="#FF4500")
+fig_main.add_hline(y=70, line_dash="dot", line_color="#FFA500", line_width=1.5, annotation_text="停投线 (70)", annotation_position="top left", annotation_font_color="#FFA500")
+
+# 中轴
+fig_main.add_hline(y=50, line_dash="dash", line_color="gray", line_width=1, annotation_text="中轴线 (50)", annotation_position="top left", annotation_font_color="gray")
+
+# 买入网格
+fig_main.add_hline(y=40, line_dash="dot", line_color="#90EE90", line_width=1.5, annotation_text="开启定投 (40)", annotation_position="bottom left", annotation_font_color="green")
+fig_main.add_hline(y=30, line_dash="dash", line_color="#32CD32", line_width=1.5, annotation_text="加大定投 (30)", annotation_position="bottom left", annotation_font_color="green")
+fig_main.add_hline(y=20, line_dash="solid", line_color="#006400", line_width=1.5, annotation_text="梭哈底线 (20)", annotation_position="bottom left", annotation_font_color="darkgreen")
+
+# 3. 绘制主线 (放在最后画，确保压在色块之上)
 fig_main.add_trace(go.Scatter(
     x=plot_df.index,
     y=plot_df['总泡沫指数'],
     mode='lines',
     name='泡沫指数',
     line=dict(color='#004488', width=3.5),
-    hovertemplate='日期: %{x|%Y-%m-%d}<br>指数数值: %{y:.2f}<extra></extra>'  # 纯中文提示框
+    hovertemplate='日期: %{x|%Y-%m-%d}<br>指数数值: %{y:.2f}<extra></extra>'  
 ))
-
-# 2. 添加警戒线 (85) 和 中轴线 (50)
-fig_main.add_hline(y=85, line_dash="solid", line_color="red", line_width=2, annotation_text="警戒线 (85)",
-                   annotation_position="top left")
-fig_main.add_hline(y=50, line_dash="dash", line_color="orange", annotation_text="中轴线 (50)",
-                   annotation_position="top left")
-
-# 3. 添加 85 以上的红色警报背景区域
-fig_main.add_hrect(y0=85, y1=100, line_width=0, fillcolor="red", opacity=0.15)
 
 # 4. 图表排版美化
 fig_main.update_layout(
-    height=450,
+    height=550,  # 稍微加高一点图表，让密集的网格线展示更清楚
     margin=dict(l=0, r=0, t=10, b=0),
-    yaxis=dict(range=[0, 100], gridcolor='rgba(0,0,0,0.1)'),
-    xaxis=dict(gridcolor='rgba(0,0,0,0.1)'),
+    yaxis=dict(range=[0, 100], gridcolor='rgba(0,0,0,0.05)'),
+    xaxis=dict(gridcolor='rgba(0,0,0,0.05)'),
     plot_bgcolor='white',
-    hovermode="x unified",  # 开启极具专业感的一体化悬停准星
+    hovermode="x unified",  
     showlegend=False
 )
 
