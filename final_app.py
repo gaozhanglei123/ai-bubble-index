@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import percentileofscore
+from io import StringIO
 
 # ============================================================
 # 全局配置
@@ -202,9 +203,8 @@ def run_backtest(df_json: str) -> list[dict]:
     接收 JSON 字符串以规避 Streamlit 无法哈希 DataFrame 的问题。
     返回各区间各周期的统计结果列表。
     """
-    df = pd.read_json(df_json)
-    if isinstance(df.index[0], (int, float)):
-        df.index = pd.to_datetime(df.index, unit='ms')
+    df = pd.read_json(StringIO(df_json))
+    df.index = pd.to_datetime(df.index, unit='ms')
     df.index.name = '日期'
 
     qqq = df['QQQ']
