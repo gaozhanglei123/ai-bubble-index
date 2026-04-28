@@ -134,10 +134,11 @@ def dark_layout(height=520, y_range=None, y_title=None, title_text=None):
 
 
 # ============================================================
-# 数据获取 & 计算（与原版完全一致，新增返回 QQQ）
+# 数据获取 & 计算（原版指标逻辑完全还原！）
 # ============================================================
 @st.cache_data(ttl=3600)
 def fetch_and_calculate():
+    # 1. 下载底层数据
     tickers = ["QQQ", "^VIX", "SPHB", "SPLV", "IPO", "SPY", "HYG", "IEF", "^TNX"]
     raw = yf.download(tickers, start="2012-01-01")
     close = raw['Close'].ffill()
@@ -147,25 +148,33 @@ def fetch_and_calculate():
         return series.rolling(window).apply(
             lambda x: pd.Series(x).rank(pct=True).iloc[-1] * 100 if len(x) >= window / 2 else np.nan)
 
-    # 情绪模块 P1-P4
+    # ==========================================
+    # 模块一：情绪指标 (P1 - P4) - 原版保留调校魔法
+    # ==========================================
     sma200 = close['QQQ'].rolling(200).mean()
     p1 = get_pct((close['QQQ'] - sma200) / sma200, 2520)
+
     p2 = get_pct(1 / close['^VIX'], 2520)
+
     p3_raw = get_pct(close['SPHB'] / close['SPLV'], 756)
-    # ✅ 去掉 0.4 压缩系数，让 P3 贡献完整的 [0,100] 幅度
-    p3 = p3_raw
+    p3 = 50 + (p3_raw - 50) * 0.4  # 保留 0.4 系数
+
     p4_enhanced = (close['IPO'] / close['SPY']) * (volume['IPO'] / volume['IPO'].rolling(126).mean())
     p4 = get_pct(p4_enhanced, 756)
 
+    # 情绪合成 (保留原版调校魔法)
     sentiment_raw = p1 * 0.3 + p2 * 0.3 + p3 * 0.1 + p4 * 0.3
     sentiment_smoothed = sentiment_raw.rolling(10).mean()
-    # ✅ 去掉 0.83 压缩系数，让情绪指数保留完整幅度
-    sentiment_index = sentiment_smoothed
+    sentiment_index = 20 + (sentiment_smoothed - 20) * 0.83  # 保留 0.83 压缩系数
 
-    # 资金模块 P5-P6
+    # ==========================================
+    # 模块二：资金指标 (P5 - P6)
+    # ==========================================
+    # P5 流动性 (高低利差平替)
     p5_raw = get_pct(close['HYG'] / close['IEF'], 756).rolling(10).mean()
     p5_final = (80 - (100 - p5_raw) * 3.0).clip(lower=0, upper=100)
 
+    # P6 降息预期 (美债收益率动量阶梯化)
     tnx_change = close['^TNX'] - close['^TNX'].shift(20)
     smoothed_change = tnx_change.rolling(10).mean()
 
@@ -177,32 +186,31 @@ def fetch_and_calculate():
         else: return 25
 
     p6_final = smoothed_change.apply(step_fn).ffill()
+
+    # 资金合成 (等权结合 P5 和 P6)
     capital_index = (p5_final + p6_final) / 2
 
-    # 合成总指数
+    # ==========================================
+    # 🚀 终极总合成：情绪 vs 资金 = 2 : 1
+    # ==========================================
     total_index = (sentiment_index * 2 + capital_index * 1) / 3
     total_smoothed = total_index.rolling(10).mean()
+    
+    # 🚀 最终修正魔法：解决整体低估风险，曲线上移 15，并锁定上限 100 下限 0 (严格还原原版)
+    total_smoothed = (total_smoothed + 15).clip(lower=0, upper=100)
 
-    # 先组装 df 并 dropna，得到干净的历史序列
-    # 再对无 NaN 的序列做 expanding 百分位归一化 —— 不会产生任何额外 NaN
     df = pd.DataFrame({
-        '总泡沫指数_raw': total_smoothed,
-        '综合情绪指标':   sentiment_index,
-        '综合资金指标':   capital_index,
-        'QQQ':           close['QQQ'],
+        '总泡沫指数': total_smoothed,
+        '综合情绪指标': sentiment_index,
+        '综合资金指标': capital_index,
+        'QQQ': close['QQQ'],  # 保留 QQQ，供回测模块使用
     }).dropna()
 
-    # 归一化：每天读数 = 截至当天全部有效历史中的累积分位数 × 100
-    df['总泡沫指数'] = (
-        df['总泡沫指数_raw']
-        .expanding(min_periods=1)
-        .rank(pct=True) * 100
-    ).clip(lower=0, upper=100)
-    df = df.drop(columns=['总泡沫指数_raw'])
-
+    # 清理时区并修改索引名称为中文
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
     df.index.name = '日期'
+
     return df
 
 
@@ -264,7 +272,7 @@ with st.spinner("📡 正在从华尔街同步底层数据..."):
 
 if df.empty:
     st.cache_data.clear()
-    st.warning("⚠️ 数据获取失败，缓存已自动清理，请刷新重试。")
+    st.warning("⚠️ 云端网络拥堵或雅虎财经 API 临时限流，未获取到完整数据。缓存已自动清理，请几秒钟后刷新网页重试。")
     st.stop()
 
 # 侧边栏
