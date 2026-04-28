@@ -37,9 +37,10 @@ section[data-testid="stSidebar"] * { color: #d1d4dc !important; }
     color: #d1d4dc !important;
     font-family: 'Courier New', monospace !important;
     font-size: 1.8rem !important;
+    font-weight: 700 !important;
 }
-[data-testid="stMetricLabel"] { color: #787b86 !important; font-size: 0.75rem !important; }
-[data-testid="stMetricDelta"] { font-family: 'Courier New', monospace !important; }
+[data-testid="stMetricLabel"] { color: #787b86 !important; font-size: 0.75rem !important; font-weight: 600 !important; }
+[data-testid="stMetricDelta"] { font-family: 'Courier New', monospace !important; font-weight: 600 !important; }
 
 /* 标题 */
 h1, h2, h3 { color: #d1d4dc !important; }
@@ -116,7 +117,7 @@ def dark_layout(height=520, y_range=None, y_title=None, title_text=None):
         height=height,
         paper_bgcolor=C_BG,
         plot_bgcolor=C_PANEL,
-        font=dict(color=C_TEXT, family="Courier New, monospace"),
+        font=dict(color=C_TEXT, family="Courier New, monospace", size=13),
         margin=dict(l=8, r=8, t=30 if title_text else 10, b=8),
         hovermode="x unified",
         showlegend=False,
@@ -151,7 +152,8 @@ def fetch_and_calculate():
     p1 = get_pct((close['QQQ'] - sma200) / sma200, 2520)
     p2 = get_pct(1 / close['^VIX'], 2520)
     p3_raw = get_pct(close['SPHB'] / close['SPLV'], 756)
-    p3 = 50 + (p3_raw - 50) * 0.4
+    # ✅ 去掉 0.4 压缩系数，让 P3 贡献完整的 [0,100] 幅度
+    p3 = p3_raw
     p4_enhanced = (close['IPO'] / close['SPY']) * (volume['IPO'] / volume['IPO'].rolling(126).mean())
     p4 = get_pct(p4_enhanced, 756)
 
@@ -180,7 +182,13 @@ def fetch_and_calculate():
     # 合成总指数
     total_index = (sentiment_index * 2 + capital_index * 1) / 3
     total_smoothed = total_index.rolling(10).mean()
-    total_smoothed = (total_smoothed + 15).clip(lower=0, upper=100)
+
+    # 替换 +15 魔法系数：用3年滚动百分位归一化
+    # 原理：每天的读数 = 它在过去756交易日中的历史分位 x 100
+    # 效果：天然撑满 0-100，极端市场自然出现极端读数，无需手动校准
+    NORM_WINDOW = 756  # 3年，足够覆盖一个完整牛熊周期
+    total_smoothed = total_smoothed.rolling(NORM_WINDOW).rank(pct=True) * 100
+    total_smoothed = total_smoothed.clip(lower=0, upper=100)
 
     df = pd.DataFrame({
         '总泡沫指数':   total_smoothed,
@@ -463,15 +471,19 @@ with tab2:
     fig_bt.add_trace(go.Bar(
         name='平均收益', x=labels, y=avgs,
         marker_color=['rgba(52,199,89,0.85)' if (v or 0) >= 0 else 'rgba(255,59,48,0.85)' for v in avgs],
+        # 标签放柱子内部，避免和菱形重叠
         text=[f"{v:+.1f}%" if not np.isnan(v) else "" for v in avgs],
-        textposition='outside', textfont=dict(color=C_TEXT, size=11),
+        textposition='inside',
+        textfont=dict(color='white', size=13, family='Courier New, monospace'),
+        insidetextanchor='middle',
+        hovertemplate='%{x}<br>平均收益: %{y:+.1f}%<extra></extra>',
     ))
     fig_bt.add_trace(go.Scatter(
         name='中位数收益', x=labels, y=meds,
-        mode='markers+text',
-        marker=dict(color='#F7DC6F', size=10, symbol='diamond'),
-        text=[f"{v:+.1f}%" if not np.isnan(v) else "" for v in meds],
-        textposition='top center', textfont=dict(color='#F7DC6F', size=10),
+        mode='markers',  # 去掉 text mode，数值仅在 hover 显示
+        marker=dict(color='#F7DC6F', size=12, symbol='diamond',
+                    line=dict(color='white', width=1)),
+        hovertemplate='%{x}<br>中位数收益: %{y:+.1f}%<extra></extra>',
     ))
     fig_bt.add_hline(y=0, line_dash="solid", line_color=C_MUTED, line_width=1)
 
@@ -493,7 +505,10 @@ with tab2:
         x=labels, y=wins,
         marker_color=[f'rgba(41,98,255,{op:.2f})' for op in bar_opacities],
         text=[f"{w:.0f}%" if not np.isnan(w) else "" for w in wins],
-        textposition='outside', textfont=dict(color=C_TEXT, size=11),
+        textposition='inside',
+        textfont=dict(color='white', size=13, family='Courier New, monospace'),
+        insidetextanchor='middle',
+        hovertemplate='%{x}<br>胜率: %{y:.0f}%<extra></extra>',
     ))
     fig_win.add_hline(
         y=50, line_dash="dash", line_color="#FF9F0A", line_width=1.5,
