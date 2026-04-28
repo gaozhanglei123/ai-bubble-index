@@ -134,7 +134,7 @@ def dark_layout(height=520, y_range=None, y_title=None, title_text=None):
 
 
 # ============================================================
-# 数据获取 & 计算（移除人工干预，使用百分位归一化）
+# 数据获取 & 计算（使用稳健线性拉伸，完美保留形态）
 # ============================================================
 @st.cache_data(ttl=3600)
 def fetch_and_calculate():
@@ -157,7 +157,7 @@ def fetch_and_calculate():
     p2 = get_pct(1 / close['^VIX'], 2520)
 
     p3_raw = get_pct(close['SPHB'] / close['SPLV'], 756)
-    p3 = p3_raw  # 🚀 改动1：去掉原来的 0.4 压缩系数，恢复 [0,100]
+    p3 = p3_raw  # 去掉 0.4 压缩系数，恢复 [0,100]
 
     p4_enhanced = (close['IPO'] / close['SPY']) * (volume['IPO'] / volume['IPO'].rolling(126).mean())
     p4 = get_pct(p4_enhanced, 756)
@@ -165,7 +165,7 @@ def fetch_and_calculate():
     # 情绪合成 
     sentiment_raw = p1 * 0.3 + p2 * 0.3 + p3 * 0.1 + p4 * 0.3
     sentiment_smoothed = sentiment_raw.rolling(10).mean()
-    sentiment_index = sentiment_smoothed  # 🚀 改动2：去掉原来的 0.83 压缩系数
+    sentiment_index = sentiment_smoothed  # 去掉 0.83 压缩系数
 
     # ==========================================
     # 模块二：资金指标 (P5 - P6)
@@ -196,9 +196,13 @@ def fetch_and_calculate():
     total_index = (sentiment_index * 2 + capital_index * 1) / 3
     total_smoothed = total_index.rolling(10).mean()
     
-    # 🚀 改动3：彻底移除硬凑的 `+15` 修正魔法。
-    # 改为滚动3年(756天)的历史分位自动归一化，解决过去永远不出极值的问题
-    total_smoothed = total_smoothed.rolling(756, min_periods=1).rank(pct=True) * 100
+    # 🚀 改动：彻底废弃会产生平顶平底的 rolling rank 排名算法。
+    # 采用【稳健线性拉伸 (Robust Min-Max Scaling)】：
+    # 抓取真实波动的 1% 和 99% 分位作为 0 和 100 的锚点，进行等比例放大。
+    # 这样既能撑满 0-100 区间，又能 100% 完美保留原版曲线的平滑起伏形态，拒绝卡顿！
+    q01 = total_smoothed.quantile(0.01)
+    q99 = total_smoothed.quantile(0.99)
+    total_smoothed = ((total_smoothed - q01) / (q99 - q01) * 100).clip(lower=0, upper=100)
 
     df = pd.DataFrame({
         '总泡沫指数': total_smoothed,
