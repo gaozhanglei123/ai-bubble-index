@@ -157,7 +157,8 @@ def fetch_and_calculate():
 
     sentiment_raw = p1 * 0.3 + p2 * 0.3 + p3 * 0.1 + p4 * 0.3
     sentiment_smoothed = sentiment_raw.rolling(10).mean()
-    sentiment_index = 20 + (sentiment_smoothed - 20) * 0.83
+    # ✅ 去掉 0.83 压缩系数，让情绪指数保留完整幅度
+    sentiment_index = sentiment_smoothed
 
     # 资金模块 P5-P6
     p5_raw = get_pct(close['HYG'] / close['IEF'], 756).rolling(10).mean()
