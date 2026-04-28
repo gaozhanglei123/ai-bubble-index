@@ -183,19 +183,22 @@ def fetch_and_calculate():
     total_index = (sentiment_index * 2 + capital_index * 1) / 3
     total_smoothed = total_index.rolling(10).mean()
 
-    # 替换 +15 魔法系数：用3年滚动百分位归一化
-    # 原理：每天的读数 = 它在过去756交易日中的历史分位 x 100
-    # 效果：天然撑满 0-100，极端市场自然出现极端读数，无需手动校准
-    NORM_WINDOW = 756  # 3年，足够覆盖一个完整牛熊周期
-    total_smoothed = total_smoothed.rolling(NORM_WINDOW).rank(pct=True) * 100
-    total_smoothed = total_smoothed.clip(lower=0, upper=100)
-
+    # 先组装 df 并 dropna，得到干净的历史序列
+    # 再对无 NaN 的序列做 expanding 百分位归一化 —— 不会产生任何额外 NaN
     df = pd.DataFrame({
-        '总泡沫指数':   total_smoothed,
-        '综合情绪指标': sentiment_index,
-        '综合资金指标': capital_index,
-        'QQQ':         close['QQQ'],
+        '总泡沫指数_raw': total_smoothed,
+        '综合情绪指标':   sentiment_index,
+        '综合资金指标':   capital_index,
+        'QQQ':           close['QQQ'],
     }).dropna()
+
+    # 归一化：每天读数 = 截至当天全部有效历史中的累积分位数 × 100
+    df['总泡沫指数'] = (
+        df['总泡沫指数_raw']
+        .expanding(min_periods=1)
+        .rank(pct=True) * 100
+    ).clip(lower=0, upper=100)
+    df = df.drop(columns=['总泡沫指数_raw'])
 
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
