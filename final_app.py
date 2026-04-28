@@ -134,7 +134,7 @@ def dark_layout(height=520, y_range=None, y_title=None, title_text=None):
 
 
 # ============================================================
-# 数据获取 & 计算（原版指标逻辑完全还原！）
+# 数据获取 & 计算（移除人工干预，使用百分位归一化）
 # ============================================================
 @st.cache_data(ttl=3600)
 def fetch_and_calculate():
@@ -149,7 +149,7 @@ def fetch_and_calculate():
             lambda x: pd.Series(x).rank(pct=True).iloc[-1] * 100 if len(x) >= window / 2 else np.nan)
 
     # ==========================================
-    # 模块一：情绪指标 (P1 - P4) - 原版保留调校魔法
+    # 模块一：情绪指标 (P1 - P4)
     # ==========================================
     sma200 = close['QQQ'].rolling(200).mean()
     p1 = get_pct((close['QQQ'] - sma200) / sma200, 2520)
@@ -157,15 +157,15 @@ def fetch_and_calculate():
     p2 = get_pct(1 / close['^VIX'], 2520)
 
     p3_raw = get_pct(close['SPHB'] / close['SPLV'], 756)
-    p3 = 50 + (p3_raw - 50) * 0.4  # 保留 0.4 系数
+    p3 = p3_raw  # 🚀 改动1：去掉原来的 0.4 压缩系数，恢复 [0,100]
 
     p4_enhanced = (close['IPO'] / close['SPY']) * (volume['IPO'] / volume['IPO'].rolling(126).mean())
     p4 = get_pct(p4_enhanced, 756)
 
-    # 情绪合成 (保留原版调校魔法)
+    # 情绪合成 
     sentiment_raw = p1 * 0.3 + p2 * 0.3 + p3 * 0.1 + p4 * 0.3
     sentiment_smoothed = sentiment_raw.rolling(10).mean()
-    sentiment_index = 20 + (sentiment_smoothed - 20) * 0.83  # 保留 0.83 压缩系数
+    sentiment_index = sentiment_smoothed  # 🚀 改动2：去掉原来的 0.83 压缩系数
 
     # ==========================================
     # 模块二：资金指标 (P5 - P6)
@@ -196,8 +196,9 @@ def fetch_and_calculate():
     total_index = (sentiment_index * 2 + capital_index * 1) / 3
     total_smoothed = total_index.rolling(10).mean()
     
-    # 🚀 最终修正魔法：解决整体低估风险，曲线上移 15，并锁定上限 100 下限 0 (严格还原原版)
-    total_smoothed = (total_smoothed + 15).clip(lower=0, upper=100)
+    # 🚀 改动3：彻底移除硬凑的 `+15` 修正魔法。
+    # 改为滚动3年(756天)的历史分位自动归一化，解决过去永远不出极值的问题
+    total_smoothed = total_smoothed.rolling(756, min_periods=1).rank(pct=True) * 100
 
     df = pd.DataFrame({
         '总泡沫指数': total_smoothed,
