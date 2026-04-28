@@ -134,7 +134,7 @@ def dark_layout(height=520, y_range=None, y_title=None, title_text=None):
 
 
 # ============================================================
-# 数据获取 & 计算（使用稳健线性拉伸，完美保留形态）
+# 数据获取 & 计算（完全还原你的原始手工调校逻辑）
 # ============================================================
 @st.cache_data(ttl=3600)
 def fetch_and_calculate():
@@ -157,15 +157,15 @@ def fetch_and_calculate():
     p2 = get_pct(1 / close['^VIX'], 2520)
 
     p3_raw = get_pct(close['SPHB'] / close['SPLV'], 756)
-    p3 = p3_raw  # 去掉 0.4 压缩系数，恢复 [0,100]
+    p3 = 50 + (p3_raw - 50) * 0.4  # 恢复原版压缩系数
 
     p4_enhanced = (close['IPO'] / close['SPY']) * (volume['IPO'] / volume['IPO'].rolling(126).mean())
     p4 = get_pct(p4_enhanced, 756)
 
-    # 情绪合成 
+    # 情绪合成 (保留调校魔法)
     sentiment_raw = p1 * 0.3 + p2 * 0.3 + p3 * 0.1 + p4 * 0.3
     sentiment_smoothed = sentiment_raw.rolling(10).mean()
-    sentiment_index = sentiment_smoothed  # 去掉 0.83 压缩系数
+    sentiment_index = 20 + (sentiment_smoothed - 20) * 0.83  # 恢复原版压缩系数
 
     # ==========================================
     # 模块二：资金指标 (P5 - P6)
@@ -196,13 +196,8 @@ def fetch_and_calculate():
     total_index = (sentiment_index * 2 + capital_index * 1) / 3
     total_smoothed = total_index.rolling(10).mean()
     
-    # 🚀 改动：彻底废弃会产生平顶平底的 rolling rank 排名算法。
-    # 采用【稳健线性拉伸 (Robust Min-Max Scaling)】：
-    # 抓取真实波动的 1% 和 99% 分位作为 0 和 100 的锚点，进行等比例放大。
-    # 这样既能撑满 0-100 区间，又能 100% 完美保留原版曲线的平滑起伏形态，拒绝卡顿！
-    q01 = total_smoothed.quantile(0.01)
-    q99 = total_smoothed.quantile(0.99)
-    total_smoothed = ((total_smoothed - q01) / (q99 - q01) * 100).clip(lower=0, upper=100)
+    # 🚀 最终修正魔法：完全还原你的 +15 曲线上移逻辑，拒绝盲目归一化导致局部的低点变成绝对恐慌。
+    total_smoothed = (total_smoothed + 15).clip(lower=0, upper=100)
 
     df = pd.DataFrame({
         '总泡沫指数': total_smoothed,
