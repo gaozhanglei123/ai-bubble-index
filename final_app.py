@@ -268,14 +268,14 @@ def fetch_ols_data():
     try:
         # 1. 抓取美股两大数据
         end_date = pd.Timestamp.today()
-        start_date = end_date - pd.Timedelta(days=40)
+        start_date = end_date - pd.Timedelta(days=60) # 拉长一点以覆盖节假日合并
         us_data = yf.download(['^NDX', '^SOX'], start=start_date, end=end_date)['Close']
         us_pct = us_data.pct_change().dropna() * 100
         us_pct.columns = ['NDX', 'SOX']
         if us_pct.index.tz is not None: us_pct.index = us_pct.index.tz_localize(None)
 
         # 2. 抓取天天基金网数据
-        url = "http://api.fund.eastmoney.com/f10/lsjz?fundCode=005698&pageIndex=1&pageSize=30"
+        url = "http://api.fund.eastmoney.com/f10/lsjz?fundCode=005698&pageIndex=1&pageSize=40"
         headers = {"Referer": "http://fundf10.eastmoney.com/"}
         res = requests.get(url, headers=headers, timeout=5).json()
         fund_df = pd.DataFrame(res['Data']['LSJZList'])
@@ -283,12 +283,40 @@ def fetch_ols_data():
         fund_df['Fund'] = pd.to_numeric(fund_df['JZZZL'], errors='coerce')
         fund_pct = fund_df.set_index('FSRQ')['Fund'].sort_index()
 
-        # 3. 合并对齐 (保留美股交易日)
-        df_combined = us_pct.join(fund_pct, how='left')
+        # 3. 智能假期对齐与复利合并 (核心改进)
+        df_combined = us_pct.copy()
+        df_combined['Fund_Raw'] = fund_pct
         
-        # 默认剔除五一假期等错位数据 (Fund 为 NaN 的行)
-        df_combined['是否纳入回归'] = df_combined['Fund'].notna() 
-        return df_combined.tail(20) # 仅取最近20个交易日以捕捉最新调仓
+        # 使用 bfill 将美股交易日映射到下一个最近的基金净值更新日
+        df_combined['Period_End'] = df_combined['Fund_Raw'].notna().replace(False, np.nan)
+        df_combined['Period_End'] = df_combined.index.where(df_combined['Period_End'].notna())
+        df_combined['Period_End'] = df_combined['Period_End'].bfill()
+
+        aligned_data = []
+        for period_end, group in df_combined.groupby('Period_End'):
+            if pd.isna(period_end): continue
+            
+            # 累乘计算期间的美股复利收益率
+            cum_ndx = ((1 + group['NDX'] / 100).prod() - 1) * 100
+            cum_sox = ((1 + group['SOX'] / 100).prod() - 1) * 100
+            fund_ret = group['Fund_Raw'].iloc[-1]
+            
+            # 格式化日期标签
+            start_dt = group.index[0].strftime('%m-%d')
+            end_dt = group.index[-1].strftime('%m-%d')
+            date_label = f"{start_dt} 至 {end_dt}" if start_dt != end_dt else start_dt
+            
+            aligned_data.append({
+                '交易区间': date_label,
+                'Date': period_end,
+                'NDX': cum_ndx,
+                'SOX': cum_sox,
+                'Fund': fund_ret
+            })
+
+        final_df = pd.DataFrame(aligned_data).set_index('Date')
+        final_df['是否纳入回归'] = True 
+        return final_df.tail(20) # 仅取最近20个有效调仓周期
     except Exception as e:
         return pd.DataFrame()
 
@@ -613,10 +641,16 @@ with tab3:
         col_table, col_model = st.columns([1.2, 1])
         
         with col_table:
-            st.markdown("**1. 数据清洗与校准** (取消勾选可剔除假期错位数据)")
+            st.markdown("**1. 数据清洗与校准** (已自动合并五一等假期错位，取消勾选可剔除极端值)")
+            
+            # 调整显示顺序，加入区间标签
+            display_cols = ['交易区间', 'NDX', 'SOX', 'Fund', '是否纳入回归']
             edited_df = st.data_editor(
-                ols_data.style.format("{:.2f}", subset=['NDX', 'SOX', 'Fund'], na_rep="空"),
-                column_config={"是否纳入回归": st.column_config.CheckboxColumn("参与回归?", default=True)},
+                ols_data[display_cols].style.format("{:.2f}", subset=['NDX', 'SOX', 'Fund'], na_rep="空"),
+                column_config={
+                    "交易区间": st.column_config.TextColumn("交易区间"),
+                    "是否纳入回归": st.column_config.CheckboxColumn("参与回归?", default=True)
+                },
                 use_container_width=True, height=300
             )
         
