@@ -321,6 +321,22 @@ def fetch_ols_data():
         return pd.DataFrame()
 
 # ============================================================
+# 新增模块：自动抓取最新单日涨跌幅 (用于净值模拟器默认值)
+# ============================================================
+@st.cache_data(ttl=1800)
+def get_latest_market_returns():
+    try:
+        # 抓取最近 5 天数据以确保至少有两个有效交易日来计算涨跌幅
+        df_recent = yf.download(['^NDX', '^SOX'], period='5d')['Close']
+        pct_recent = df_recent.pct_change().dropna() * 100
+        dt_str = pct_recent.index[-1].strftime('%Y-%m-%d')
+        val_ndx = float(pct_recent['^NDX'].iloc[-1])
+        val_sox = float(pct_recent['^SOX'].iloc[-1])
+        return dt_str, val_ndx, val_sox
+    except Exception:
+        return "未知日期", 0.0, 0.0
+
+# ============================================================
 # 页面渲染
 # ============================================================
 st.markdown("# 🛡️ 私人量化终端：美投 AI 泡沫综合指数 V3.0")
@@ -681,11 +697,14 @@ with tab3:
         st.markdown("---")
         st.markdown("### 🎯 净值模拟器")
         
+        latest_dt, auto_ndx, auto_sox = get_latest_market_returns()
+        st.markdown(f"<p style='color:#787b86;font-size:0.85rem;'>🤖 已自动同步美股最新交易日 (<b>{latest_dt}</b>) 的真实收盘数据。你也可以在下方手动修改进行沙盘推演：</p>", unsafe_allow_html=True)
+        
         pred_col1, pred_col2, pred_col3 = st.columns([1, 1, 1.5])
         with pred_col1:
-            in_ndx = st.number_input("👉 设定当日 NDX 涨跌幅 (%)", value=2.35, step=0.1)
+            in_ndx = st.number_input("👉 当日 NDX 涨跌幅 (%)", value=round(auto_ndx, 2), step=0.1)
         with pred_col2:
-            in_sox = st.number_input("👉 设定当日 SOX 涨跌幅 (%)", value=5.00, step=0.1)
+            in_sox = st.number_input("👉 当日 SOX 涨跌幅 (%)", value=round(auto_sox, 2), step=0.1)
             
         if len(valid_data) >= 5:
             pred_val = alpha + beta_ndx * in_ndx + beta_sox * in_sox
