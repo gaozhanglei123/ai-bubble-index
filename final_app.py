@@ -339,7 +339,10 @@ def get_latest_market_returns():
 # ============================================================
 # 页面渲染
 # ============================================================
-st.markdown("# 🛡️ 私人量化终端：美投 AI 泡沫综合指数 V3.0")
+st.markdown(
+    "<h1>🛡️ 私人量化终端：美投 AI 泡沫综合指数 V3.0 <span style='float: right; font-size: 0.9rem; color: #787b86; padding-top: 15px; font-weight: normal; font-family: \"Courier New\", monospace;'>Built by <b style='color: #2962ff;'>高章磊</b></span></h1>", 
+    unsafe_allow_html=True
+)
 
 with st.spinner("📡 正在从华尔街同步底层数据..."):
     df = fetch_and_calculate()
