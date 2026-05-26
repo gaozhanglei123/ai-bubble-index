@@ -7,6 +7,7 @@ from scipy.stats import percentileofscore
 from io import StringIO
 import requests
 import statsmodels.api as sm
+import os  # 新增：用于检查本地缓存文件是否存在
 
 # ============================================================
 # 全局配置
@@ -134,13 +135,45 @@ def dark_layout(height=520, y_range=None, y_title=None, title_text=None):
     return layout
 
 # ============================================================
-# 数据获取 & 计算（完全还原你的原始手工调校逻辑）
+# 数据获取 & 计算（增加本地缓存与断网降级）
 # ============================================================
 @st.cache_data(ttl=3600)
 def fetch_and_calculate():
-    # 1. 下载底层数据
     tickers = ["QQQ", "^VIX", "SPHB", "SPLV", "IPO", "SPY", "HYG", "IEF", "^TNX"]
-    raw = yf.download(tickers, start="2012-01-01")
+    cache_file = "market_data_cache.pkl"
+    
+    # 1. 尝试加载本地历史底稿
+    cached_data = None
+    if os.path.exists(cache_file):
+        try:
+            cached_data = pd.read_pickle(cache_file)
+        except Exception:
+            pass
+
+    # 2. 尝试获取网络新数据并合并
+    try:
+        new_data = yf.download(tickers, start="2012-01-01", progress=False)
+        if new_data.empty:
+            raise ValueError("网络返回空数据")
+            
+        if cached_data is not None:
+            # 增量合并：优先用新数据，网站删掉的旧数据从缓存补全
+            raw = new_data.combine_first(cached_data)
+        else:
+            raw = new_data
+            
+        # 更新本地缓存
+        raw.to_pickle(cache_file)
+        
+    except Exception as e:
+        # 网络失败，降级使用缓存
+        if cached_data is not None:
+            raw = cached_data
+            st.toast("⚠️ 实时底层数据抓取失败，已无缝切换至本地历史缓存！", icon="📡")
+        else:
+            return pd.DataFrame()
+
+    # 3. 核心计算逻辑
     close = raw['Close'].ffill()
     volume = raw['Volume'].ffill()
 
@@ -162,7 +195,7 @@ def fetch_and_calculate():
     p4_enhanced = (close['IPO'] / close['SPY']) * (volume['IPO'] / volume['IPO'].rolling(126).mean())
     p4 = get_pct(p4_enhanced, 756)
 
-    # 情绪合成 (保留调校魔法)
+    # 情绪合成
     sentiment_raw = p1 * 0.3 + p2 * 0.3 + p3 * 0.1 + p4 * 0.3
     sentiment_smoothed = sentiment_raw.rolling(10).mean()
     sentiment_index = 20 + (sentiment_smoothed - 20) * 0.83  # 恢复原版压缩系数
@@ -170,11 +203,9 @@ def fetch_and_calculate():
     # ==========================================
     # 模块二：资金指标 (P5 - P6)
     # ==========================================
-    # P5 流动性 (高低利差平替)
     p5_raw = get_pct(close['HYG'] / close['IEF'], 756).rolling(10).mean()
     p5_final = (80 - (100 - p5_raw) * 3.0).clip(lower=0, upper=100)
 
-    # P6 降息预期 (美债收益率动量阶梯化)
     tnx_change = close['^TNX'] - close['^TNX'].shift(20)
     smoothed_change = tnx_change.rolling(10).mean()
 
@@ -187,7 +218,7 @@ def fetch_and_calculate():
 
     p6_final = smoothed_change.apply(step_fn).ffill()
 
-    # 资金合成 (等权结合 P5 和 P6)
+    # 资金合成
     capital_index = (p5_final + p6_final) / 2
 
     # ==========================================
@@ -196,7 +227,7 @@ def fetch_and_calculate():
     total_index = (sentiment_index * 2 + capital_index * 1) / 3
     total_smoothed = total_index.rolling(10).mean()
     
-    # 🚀 最终修正魔法：完全还原你的 +15 曲线上移逻辑，拒绝盲目归一化导致局部的低点变成绝对恐慌。
+    # 最终修正魔法
     total_smoothed = (total_smoothed + 15).clip(lower=0, upper=100)
 
     df = pd.DataFrame({
@@ -206,7 +237,6 @@ def fetch_and_calculate():
         'QQQ': close['QQQ'],  # 保留 QQQ，供回测模块使用
     }).dropna()
 
-    # 清理时区并修改索引名称为中文
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
     df.index.name = '日期'
@@ -218,10 +248,6 @@ def fetch_and_calculate():
 # ============================================================
 @st.cache_data(ttl=3600)
 def run_backtest(df_json: str) -> list[dict]:
-    """
-    接收 JSON 字符串以规避 Streamlit 无法哈希 DataFrame 的问题。
-    返回各区间各周期的统计结果列表。
-    """
     df = pd.read_json(StringIO(df_json))
     df.index = pd.to_datetime(df.index, unit='ms')
     df.index.name = '日期'
@@ -261,15 +287,24 @@ def run_backtest(df_json: str) -> list[dict]:
     return results
 
 # ============================================================
-# 新增模块：华夏基金 OLS 预测逻辑
+# 新增模块：华夏基金 OLS 预测逻辑 (同样加入缓存防丢机制)
 # ============================================================
 @st.cache_data(ttl=3600)
 def fetch_ols_data():
+    cache_file = "ols_data_cache.pkl"
+    cached_data = None
+    
+    if os.path.exists(cache_file):
+        try:
+            cached_data = pd.read_pickle(cache_file)
+        except Exception:
+            pass
+            
     try:
         # 1. 抓取美股两大数据
         end_date = pd.Timestamp.today()
-        start_date = end_date - pd.Timedelta(days=60) # 拉长一点以覆盖节假日合并
-        us_data = yf.download(['^NDX', '^SOX'], start=start_date, end=end_date)['Close']
+        start_date = end_date - pd.Timedelta(days=60)
+        us_data = yf.download(['^NDX', '^SOX'], start=start_date, end=end_date, progress=False)['Close']
         us_pct = us_data.pct_change().dropna() * 100
         us_pct.columns = ['NDX', 'SOX']
         if us_pct.index.tz is not None: us_pct.index = us_pct.index.tz_localize(None)
@@ -283,11 +318,10 @@ def fetch_ols_data():
         fund_df['Fund'] = pd.to_numeric(fund_df['JZZZL'], errors='coerce')
         fund_pct = fund_df.set_index('FSRQ')['Fund'].sort_index()
 
-        # 3. 智能假期对齐与复利合并 (核心改进)
+        # 3. 智能假期对齐与复利合并
         df_combined = us_pct.copy()
         df_combined['Fund_Raw'] = fund_pct
         
-        # 使用 bfill 将美股交易日映射到下一个最近的基金净值更新日
         df_combined['Period_End'] = df_combined['Fund_Raw'].notna().replace(False, np.nan)
         df_combined['Period_End'] = df_combined.index.where(df_combined['Period_End'].notna())
         df_combined['Period_End'] = df_combined['Period_End'].bfill()
@@ -296,12 +330,10 @@ def fetch_ols_data():
         for period_end, group in df_combined.groupby('Period_End'):
             if pd.isna(period_end): continue
             
-            # 累乘计算期间的美股复利收益率
             cum_ndx = ((1 + group['NDX'] / 100).prod() - 1) * 100
             cum_sox = ((1 + group['SOX'] / 100).prod() - 1) * 100
             fund_ret = group['Fund_Raw'].iloc[-1]
             
-            # 格式化日期标签
             start_dt = group.index[0].strftime('%m-%d')
             end_dt = group.index[-1].strftime('%m-%d')
             date_label = f"{start_dt} 至 {end_dt}" if start_dt != end_dt else start_dt
@@ -316,18 +348,27 @@ def fetch_ols_data():
 
         final_df = pd.DataFrame(aligned_data).set_index('Date')
         final_df['是否纳入回归'] = True 
-        return final_df.tail(20) # 仅取最近20个有效调仓周期
+        
+        # 将网络新抓取的数据与历史缓存合并
+        if cached_data is not None:
+            final_df = final_df.combine_first(cached_data)
+            
+        final_df.to_pickle(cache_file)
+        return final_df.tail(20) 
+        
     except Exception as e:
+        if cached_data is not None:
+            st.toast("⚠️ 基金实时数据抓取失败，使用历史缓存数据", icon="📡")
+            return cached_data.tail(20)
         return pd.DataFrame()
 
 # ============================================================
-# 新增模块：自动抓取最新单日涨跌幅 (用于净值模拟器默认值)
+# 新增模块：自动抓取最新单日涨跌幅
 # ============================================================
 @st.cache_data(ttl=1800)
 def get_latest_market_returns():
     try:
-        # 抓取最近 5 天数据以确保至少有两个有效交易日来计算涨跌幅
-        df_recent = yf.download(['^NDX', '^SOX'], period='5d')['Close']
+        df_recent = yf.download(['^NDX', '^SOX'], period='5d', progress=False)['Close']
         pct_recent = df_recent.pct_change().dropna() * 100
         dt_str = pct_recent.index[-1].strftime('%Y-%m-%d')
         val_ndx = float(pct_recent['^NDX'].iloc[-1])
@@ -344,12 +385,12 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-with st.spinner("📡 正在从华尔街同步底层数据..."):
+with st.spinner("📡 正在同步华尔街与本地数据库..."):
     df = fetch_and_calculate()
 
 if df.empty:
     st.cache_data.clear()
-    st.warning("⚠️ 云端网络拥堵或雅虎财经 API 临时限流，未获取到完整数据。缓存已自动清理，请几秒钟后刷新网页重试。")
+    st.warning("⚠️ 网络完全阻断且无本地缓存记录。系统暂停工作，请检查网络连接后重试。")
     st.stop()
 
 # 侧边栏
@@ -369,19 +410,18 @@ elif val >= 30: status, emoji = "偏低区域 (推荐开启定投)", "🟢"
 elif val >= 20: status, emoji = "恐慌底部 (建议加大定投)", "🟩"
 else:           status, emoji = "史诗级大底 (黄金坑/梭哈)", "💎"
 
-# 历史百分位（基于全量历史，不受滑块影响）
+# 历史百分位
 all_vals = df['总泡沫指数'].dropna().values
 pct_rank = percentileofscore(all_vals, val, kind='rank')
 history_start = df.index[0].strftime('%Y-%m')
 
-# 百分位对应提示
 if pct_rank >= 90:   pct_note = "历史极高位 ⚠️"
 elif pct_rank >= 75: pct_note = "历史偏高"
 elif pct_rank >= 25: pct_note = "历史中性"
 elif pct_rank >= 10: pct_note = "历史偏低"
 else:                pct_note = "历史极低位 💎"
 
-# 顶部指标卡（4列）
+# 顶部指标卡
 col1, col2, col3, col4 = st.columns([1, 2, 1, 1])
 col1.metric("🚨 AI 泡沫指数",  f"{val:.1f}", f"{delta:+.2f}", delta_color="inverse")
 col2.metric("📊 市场状态评级", f"{emoji} {status}")
@@ -391,7 +431,7 @@ col4.metric(f"📐 历史百分位 (since {history_start})", f"{pct_rank:.1f}%",
 st.markdown("---")
 
 # ============================================================
-# Tabs (新增第三个 Tab)
+# Tabs 
 # ============================================================
 tab1, tab2, tab3 = st.tabs(["  📈  综合指数看板  ", "  🔬  历史回测分析  ", "  🔮  华夏净值预测 (OLS)  "])
 
@@ -403,14 +443,12 @@ with tab1:
 
     fig_main = go.Figure()
 
-    # 背景色块
     for y0, y1, fc, op in [
         (90, 100, "#FF0000", 0.12), (80, 90, "#FF4500", 0.08), (70, 80, "#FFA500", 0.06),
         (30, 40,  "#90EE90", 0.06), (20, 30, "#32CD32", 0.10), (0,  20, "#006400", 0.15),
     ]:
         fig_main.add_hrect(y0=y0, y1=y1, line_width=0, fillcolor=fc, opacity=op)
 
-    # 水位网格线
     for y, label, color, dash in [
         (90, "清仓线 (90)",  "#FF3B30", "solid"),
         (80, "减仓线 (80)",  "#FF6B35", "dash"),
@@ -427,7 +465,6 @@ with tab1:
             annotation_font_color=color, annotation_font_size=10,
         )
 
-    # 主曲线
     fig_main.add_trace(go.Scatter(
         x=plot_df.index, y=plot_df['总泡沫指数'],
         mode='lines', name='泡沫指数',
@@ -439,7 +476,6 @@ with tab1:
     fig_main.update_layout(**layout)
     st.plotly_chart(fig_main, use_container_width=True)
 
-    # 历史分布图
     st.markdown("---")
     st.subheader("📐 历史百分位分布")
 
@@ -447,14 +483,12 @@ with tab1:
 
     fig_dist = go.Figure()
 
-    # 背景色块（和主图一致）
     for y0, y1, fc, op in [
         (90, 100, "#FF0000", 0.10), (80, 90, "#FF4500", 0.07), (70, 80, "#FFA500", 0.05),
         (30, 40, "#90EE90", 0.05),  (20, 30, "#32CD32", 0.08), (0, 20, "#006400", 0.12),
     ]:
         fig_dist.add_vrect(x0=y0, x1=y1, line_width=0, fillcolor=fc, opacity=op)
 
-    # 历史分布直方图
     fig_dist.add_trace(go.Histogram(
         x=hist_vals, nbinsx=50,
         name='历史分布',
@@ -463,7 +497,6 @@ with tab1:
         hovertemplate='区间: %{x:.1f}<br>天数: %{y}<extra></extra>',
     ))
 
-    # 当前值竖线
     fig_dist.add_vline(
         x=val, line_dash="solid", line_color="#F7DC6F", line_width=2.5,
         annotation_text=f"当前 {val:.1f}  ({pct_rank:.1f}% 百分位)",
@@ -512,7 +545,6 @@ with tab1:
         fig_c.update_layout(**dark_layout(height=260))
         st.plotly_chart(fig_c, use_container_width=True)
 
-
 # ──────────────────────────────────────────────
 # Tab 2：历史回测分析
 # ──────────────────────────────────────────────
@@ -528,7 +560,6 @@ with tab2:
     with st.spinner("⚙️ 正在运行历史回测..."):
         results = run_backtest(df.to_json())
 
-    # ── 汇总表格 ──
     st.markdown("#### 📋 各区间历史收益汇总表")
     table_rows = []
     for r in results:
@@ -541,10 +572,8 @@ with tab2:
         table_rows.append(row)
 
     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
-
     st.markdown("---")
 
-    # ── 选择持有周期 ──
     selected = st.selectbox("📅 选择持有周期查看详细图表", [p[0] for p in PERIODS], index=2)
 
     avgs   = [r.get(f'{selected}_avg',    np.nan) for r in results]
@@ -552,14 +581,12 @@ with tab2:
     wins   = [r.get(f'{selected}_win',    np.nan) for r in results]
     labels = [r['区间'] for r in results]
 
-    # ── 均值 vs 中位数收益 ──
     st.markdown(f"#### 📊 持有 {selected} 的平均 & 中位数收益率 (QQQ)")
     fig_bt = go.Figure()
 
     fig_bt.add_trace(go.Bar(
         name='平均收益', x=labels, y=avgs,
         marker_color=['rgba(52,199,89,0.85)' if (v or 0) >= 0 else 'rgba(255,59,48,0.85)' for v in avgs],
-        # 标签放柱子内部，避免和菱形重叠
         text=[f"{v:+.1f}%" if not np.isnan(v) else "" for v in avgs],
         textposition='inside',
         textfont=dict(color='white', size=13, family='Courier New, monospace'),
@@ -568,7 +595,7 @@ with tab2:
     ))
     fig_bt.add_trace(go.Scatter(
         name='中位数收益', x=labels, y=meds,
-        mode='markers',  # 去掉 text mode，数值仅在 hover 显示
+        mode='markers', 
         marker=dict(color='#F7DC6F', size=12, symbol='diamond',
                     line=dict(color='white', width=1)),
         hovertemplate='%{x}<br>中位数收益: %{y:+.1f}%<extra></extra>',
@@ -584,7 +611,6 @@ with tab2:
     fig_bt.update_layout(**layout_bt)
     st.plotly_chart(fig_bt, use_container_width=True)
 
-    # ── 胜率图 ──
     st.markdown(f"#### 🎯 持有 {selected} 的正收益胜率 (%)")
     fig_win = go.Figure()
 
@@ -608,7 +634,6 @@ with tab2:
     fig_win.update_layout(**layout_win)
     st.plotly_chart(fig_win, use_container_width=True)
 
-    # ── 四周期折线对比 ──
     st.markdown("---")
     st.markdown("#### 📈 不同持有周期的均值收益率对比（各区间）")
     fig_multi = go.Figure()
@@ -642,7 +667,7 @@ with tab2:
     )
 
 # ──────────────────────────────────────────────
-# Tab 3: 华夏基金 OLS 预测核心 (全新增加)
+# Tab 3: 华夏基金 OLS 预测核心 
 # ──────────────────────────────────────────────
 with tab3:
     st.subheader("🔮 华夏全球科技先锋 (005698) 双因子 OLS 预测")
@@ -655,14 +680,13 @@ with tab3:
     ols_data = fetch_ols_data()
     
     if ols_data.empty:
-        st.error("获取 OLS 回归数据失败，请检查网络。")
+        st.error("获取 OLS 回归数据失败，请检查网络或稍后重试。")
     else:
         col_table, col_model = st.columns([1.2, 1])
         
         with col_table:
             st.markdown("**1. 数据清洗与校准** (已自动合并五一等假期错位，取消勾选可剔除极端值)")
             
-            # 调整显示顺序，加入区间标签
             display_cols = ['交易区间', 'NDX', 'SOX', 'Fund', '是否纳入回归']
             edited_df = st.data_editor(
                 ols_data[display_cols].style.format("{:.2f}", subset=['NDX', 'SOX', 'Fund'], na_rep="空"),
@@ -673,7 +697,6 @@ with tab3:
                 use_container_width=True, height=300
             )
         
-        # 运行回归
         valid_data = edited_df[edited_df['是否纳入回归'] == True].dropna(subset=['NDX', 'SOX', 'Fund'])
         
         with col_model:
