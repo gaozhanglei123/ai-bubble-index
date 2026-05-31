@@ -315,6 +315,13 @@ def fetch_ols_data():
             })
 
         final_df = pd.DataFrame(aligned_data).set_index('Date')
+        
+        # =======================================================
+        # 🚀 核心修改：强制剔除异常合并周期，直接从 4月29日 开始拟合
+        # =======================================================
+        final_df.index = pd.to_datetime(final_df.index)
+        final_df = final_df[final_df.index >= '2026-04-29']
+        
         final_df['是否纳入回归'] = True 
         return final_df.tail(20) # 仅取最近20个有效调仓周期
     except Exception as e:
@@ -547,9 +554,9 @@ with tab2:
     # ── 选择持有周期 ──
     selected = st.selectbox("📅 选择持有周期查看详细图表", [p[0] for p in PERIODS], index=2)
 
-    avgs   = [r.get(f'{selected}_avg',    np.nan) for r in results]
+    avgs   = [r.get(f'{selected}_avg',     np.nan) for r in results]
     meds   = [r.get(f'{selected}_median', np.nan) for r in results]
-    wins   = [r.get(f'{selected}_win',    np.nan) for r in results]
+    wins   = [r.get(f'{selected}_win',     np.nan) for r in results]
     labels = [r['区间'] for r in results]
 
     # ── 均值 vs 中位数收益 ──
