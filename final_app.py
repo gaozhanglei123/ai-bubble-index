@@ -316,7 +316,11 @@ def fetch_ols_data():
 
         final_df = pd.DataFrame(aligned_data).set_index('Date')
         final_df['是否纳入回归'] = True 
-        return final_df.tail(20) # 仅取最近20个有效调仓周期
+        # ✅ 只改这里：过滤掉 4/28 及之前的数据
+        cutoff = pd.Timestamp('2026-04-29')
+        filtered_df = final_df[final_df.index >= cutoff]
+        
+        return filtered_df.tail(20)  # 仅取最近20个有效调仓周期
     except Exception as e:
         return pd.DataFrame()
 
