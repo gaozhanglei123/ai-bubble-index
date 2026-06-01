@@ -266,8 +266,8 @@ def run_backtest(df_json: str) -> list[dict]:
 @st.cache_data(ttl=3600)
 def fetch_ols_data():
     try:
-        # ✅ 固定从2025年5月1日开始统计（新持仓起点，剔除之前持仓变动的干扰）
-        start_date = pd.Timestamp("2025-05-01")
+        # ✅ 固定从2026年5月1日开始统计（新持仓起点，剔除之前持仓变动的干扰）
+        start_date = pd.Timestamp("2026-05-01")
         end_date = pd.Timestamp.today()
 
         us_data = yf.download(['^NDX', '^SOX'], start=start_date, end=end_date)['Close']
@@ -285,7 +285,7 @@ def fetch_ols_data():
         fund_df['Fund'] = pd.to_numeric(fund_df['JZZZL'], errors='coerce')
         fund_pct = fund_df.set_index('FSRQ')['Fund'].sort_index()
 
-        # ✅ 只保留2025-05-01之后的基金净值数据
+        # ✅ 只保留2026-05-01之后的基金净值数据
         fund_pct = fund_pct[fund_pct.index >= start_date]
 
         # 智能假期对齐与复利合并
@@ -363,6 +363,11 @@ if df.empty:
 st.sidebar.header("⚙️ 看板控制台")
 days = st.sidebar.slider("时间轴范围 (天)", 100, 1500, 400)
 plot_df = df.tail(days)
+
+st.sidebar.markdown("---")
+if st.sidebar.button("🔄 强制刷新数据缓存"):
+    st.cache_data.clear()
+    st.rerun()
 
 # 当前状态
 val   = float(plot_df['总泡沫指数'].iloc[-1])
@@ -652,7 +657,7 @@ with tab3:
     st.subheader("🔮 华夏全球科技先锋 (005698) 双因子 OLS 预测")
     st.markdown("""
     <p style='color:#787b86;font-size:0.9rem;'>
-    本模块自动抓取 <b style='color:#d1d4dc;'>2025年5月起</b>（持仓调整后）的纳斯达克(NDX)、半导体(SOX)及该基金的实际每日涨跌幅，
+    本模块自动抓取 <b style='color:#d1d4dc;'>2026年5月起</b>（持仓调整后）的纳斯达克(NDX)、半导体(SOX)及该基金的实际每日涨跌幅，
     通过多元线性回归测算基金经理真实的底仓暴露度。
     </p>
     """, unsafe_allow_html=True)
