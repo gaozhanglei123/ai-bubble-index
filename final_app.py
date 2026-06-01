@@ -263,7 +263,7 @@ def run_backtest(df_json: str) -> list[dict]:
 # ============================================================
 # 华夏基金 OLS 预测逻辑（已修改：从2025-05-01开始统计）
 # ============================================================
-@st.cache_data(ttl=1)
+@st.cache_data(ttl=3600)
 def fetch_ols_data():
     try:
         # ✅ 新持仓起点：2026年5月1日
@@ -351,6 +351,12 @@ def get_latest_market_returns():
 # ============================================================
 # 页面渲染
 # ============================================================
+
+# 每次服务器重新部署后首次加载时自动清缓存
+if "cache_cleared" not in st.session_state:
+    st.cache_data.clear()
+    st.session_state["cache_cleared"] = True
+
 st.markdown(
     "<h1>🛡️ 私人量化终端：美投 AI 泡沫综合指数 V3.0 <span style='float: right; font-size: 0.9rem; color: #787b86; padding-top: 15px; font-weight: normal; font-family: \"Courier New\", monospace;'>Built by <b style='color: #2962ff;'>高章磊</b></span></h1>",
     unsafe_allow_html=True
@@ -667,7 +673,7 @@ with tab3:
     </p>
     """, unsafe_allow_html=True)
 
-    ols_data = fetch_ols_data_v2()
+    ols_data = fetch_ols_data()
 
     if ols_data.empty:
         st.error("获取 OLS 回归数据失败，请检查网络。")
