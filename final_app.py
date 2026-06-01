@@ -195,8 +195,8 @@ def fetch_and_calculate():
     # ==========================================
     total_index = (sentiment_index * 2 + capital_index * 1) / 3
     total_smoothed = total_index.rolling(10).mean()
-    
-    # 🚀 最终修正魔法：完全还原你的 +15 曲线上移逻辑，拒绝盲目归一化导致局部的低点变成绝对恐慌。
+
+    # 🚀 最终修正魔法：完全还原你的 +15 曲线上移逻辑
     total_smoothed = (total_smoothed + 15).clip(lower=0, upper=100)
 
     df = pd.DataFrame({
@@ -261,21 +261,23 @@ def run_backtest(df_json: str) -> list[dict]:
     return results
 
 # ============================================================
-# 新增模块：华夏基金 OLS 预测逻辑
+# 华夏基金 OLS 预测逻辑（已修改：从2025-05-01开始统计）
 # ============================================================
 @st.cache_data(ttl=3600)
 def fetch_ols_data():
     try:
-        # 1. 抓取美股两大数据
+        # ✅ 固定从2025年5月1日开始统计（新持仓起点，剔除之前持仓变动的干扰）
+        start_date = pd.Timestamp("2025-05-01")
         end_date = pd.Timestamp.today()
-        start_date = end_date - pd.Timedelta(days=60) # 拉长一点以覆盖节假日合并
+
         us_data = yf.download(['^NDX', '^SOX'], start=start_date, end=end_date)['Close']
         us_pct = us_data.pct_change().dropna() * 100
         us_pct.columns = ['NDX', 'SOX']
-        if us_pct.index.tz is not None: us_pct.index = us_pct.index.tz_localize(None)
+        if us_pct.index.tz is not None:
+            us_pct.index = us_pct.index.tz_localize(None)
 
-        # 2. 抓取天天基金网数据
-        url = "http://api.fund.eastmoney.com/f10/lsjz?fundCode=005698&pageIndex=1&pageSize=40"
+        # ✅ pageSize扩大到60，确保完整覆盖5月至今的所有净值数据
+        url = "http://api.fund.eastmoney.com/f10/lsjz?fundCode=005698&pageIndex=1&pageSize=60"
         headers = {"Referer": "http://fundf10.eastmoney.com/"}
         res = requests.get(url, headers=headers, timeout=5).json()
         fund_df = pd.DataFrame(res['Data']['LSJZList'])
@@ -283,29 +285,32 @@ def fetch_ols_data():
         fund_df['Fund'] = pd.to_numeric(fund_df['JZZZL'], errors='coerce')
         fund_pct = fund_df.set_index('FSRQ')['Fund'].sort_index()
 
-        # 3. 智能假期对齐与复利合并 (核心改进)
+        # ✅ 只保留2025-05-01之后的基金净值数据
+        fund_pct = fund_pct[fund_pct.index >= start_date]
+
+        # 智能假期对齐与复利合并
         df_combined = us_pct.copy()
         df_combined['Fund_Raw'] = fund_pct
-        
-        # 使用 bfill 将美股交易日映射到下一个最近的基金净值更新日
+
         df_combined['Period_End'] = df_combined['Fund_Raw'].notna().replace(False, np.nan)
         df_combined['Period_End'] = df_combined.index.where(df_combined['Period_End'].notna())
         df_combined['Period_End'] = df_combined['Period_End'].bfill()
 
         aligned_data = []
         for period_end, group in df_combined.groupby('Period_End'):
-            if pd.isna(period_end): continue
-            
+            if pd.isna(period_end):
+                continue
+
             # 累乘计算期间的美股复利收益率
             cum_ndx = ((1 + group['NDX'] / 100).prod() - 1) * 100
             cum_sox = ((1 + group['SOX'] / 100).prod() - 1) * 100
             fund_ret = group['Fund_Raw'].iloc[-1]
-            
+
             # 格式化日期标签
             start_dt = group.index[0].strftime('%m-%d')
             end_dt = group.index[-1].strftime('%m-%d')
             date_label = f"{start_dt} 至 {end_dt}" if start_dt != end_dt else start_dt
-            
+
             aligned_data.append({
                 '交易区间': date_label,
                 'Date': period_end,
@@ -315,18 +320,20 @@ def fetch_ols_data():
             })
 
         final_df = pd.DataFrame(aligned_data).set_index('Date')
-        final_df['是否纳入回归'] = True 
-        return final_df.tail(20) # 仅取最近20个有效调仓周期
+        final_df['是否纳入回归'] = True
+
+        # ✅ 不再用 tail(20) 截断，5月至今数据量本身有限，全量返回
+        return final_df
+
     except Exception as e:
         return pd.DataFrame()
 
 # ============================================================
-# 新增模块：自动抓取最新单日涨跌幅 (用于净值模拟器默认值)
+# 自动抓取最新单日涨跌幅 (用于净值模拟器默认值)
 # ============================================================
 @st.cache_data(ttl=1800)
 def get_latest_market_returns():
     try:
-        # 抓取最近 5 天数据以确保至少有两个有效交易日来计算涨跌幅
         df_recent = yf.download(['^NDX', '^SOX'], period='5d')['Close']
         pct_recent = df_recent.pct_change().dropna() * 100
         dt_str = pct_recent.index[-1].strftime('%Y-%m-%d')
@@ -340,7 +347,7 @@ def get_latest_market_returns():
 # 页面渲染
 # ============================================================
 st.markdown(
-    "<h1>🛡️ 私人量化终端：美投 AI 泡沫综合指数 V3.0 <span style='float: right; font-size: 0.9rem; color: #787b86; padding-top: 15px; font-weight: normal; font-family: \"Courier New\", monospace;'>Built by <b style='color: #2962ff;'>高章磊</b></span></h1>", 
+    "<h1>🛡️ 私人量化终端：美投 AI 泡沫综合指数 V3.0 <span style='float: right; font-size: 0.9rem; color: #787b86; padding-top: 15px; font-weight: normal; font-family: \"Courier New\", monospace;'>Built by <b style='color: #2962ff;'>高章磊</b></span></h1>",
     unsafe_allow_html=True
 )
 
@@ -391,7 +398,7 @@ col4.metric(f"📐 历史百分位 (since {history_start})", f"{pct_rank:.1f}%",
 st.markdown("---")
 
 # ============================================================
-# Tabs (新增第三个 Tab)
+# Tabs
 # ============================================================
 tab1, tab2, tab3 = st.tabs(["  📈  综合指数看板  ", "  🔬  历史回测分析  ", "  🔮  华夏净值预测 (OLS)  "])
 
@@ -447,14 +454,12 @@ with tab1:
 
     fig_dist = go.Figure()
 
-    # 背景色块（和主图一致）
     for y0, y1, fc, op in [
         (90, 100, "#FF0000", 0.10), (80, 90, "#FF4500", 0.07), (70, 80, "#FFA500", 0.05),
         (30, 40, "#90EE90", 0.05),  (20, 30, "#32CD32", 0.08), (0, 20, "#006400", 0.12),
     ]:
         fig_dist.add_vrect(x0=y0, x1=y1, line_width=0, fillcolor=fc, opacity=op)
 
-    # 历史分布直方图
     fig_dist.add_trace(go.Histogram(
         x=hist_vals, nbinsx=50,
         name='历史分布',
@@ -463,7 +468,6 @@ with tab1:
         hovertemplate='区间: %{x:.1f}<br>天数: %{y}<extra></extra>',
     ))
 
-    # 当前值竖线
     fig_dist.add_vline(
         x=val, line_dash="solid", line_color="#F7DC6F", line_width=2.5,
         annotation_text=f"当前 {val:.1f}  ({pct_rank:.1f}% 百分位)",
@@ -486,6 +490,7 @@ with tab1:
         f"<b style='color:#F7DC6F'>{pct_rank:.1f}%</b> 的交易日。</p>",
         unsafe_allow_html=True,
     )
+
     col_A, col_B = st.columns(2)
 
     with col_A:
@@ -559,7 +564,6 @@ with tab2:
     fig_bt.add_trace(go.Bar(
         name='平均收益', x=labels, y=avgs,
         marker_color=['rgba(52,199,89,0.85)' if (v or 0) >= 0 else 'rgba(255,59,48,0.85)' for v in avgs],
-        # 标签放柱子内部，避免和菱形重叠
         text=[f"{v:+.1f}%" if not np.isnan(v) else "" for v in avgs],
         textposition='inside',
         textfont=dict(color='white', size=13, family='Courier New, monospace'),
@@ -568,7 +572,7 @@ with tab2:
     ))
     fig_bt.add_trace(go.Scatter(
         name='中位数收益', x=labels, y=meds,
-        mode='markers',  # 去掉 text mode，数值仅在 hover 显示
+        mode='markers',
         marker=dict(color='#F7DC6F', size=12, symbol='diamond',
                     line=dict(color='white', width=1)),
         hovertemplate='%{x}<br>中位数收益: %{y:+.1f}%<extra></extra>',
@@ -642,27 +646,27 @@ with tab2:
     )
 
 # ──────────────────────────────────────────────
-# Tab 3: 华夏基金 OLS 预测核心 (全新增加)
+# Tab 3: 华夏基金 OLS 预测（从2025-05-01起统计）
 # ──────────────────────────────────────────────
 with tab3:
     st.subheader("🔮 华夏全球科技先锋 (005698) 双因子 OLS 预测")
     st.markdown("""
     <p style='color:#787b86;font-size:0.9rem;'>
-    本模块自动抓取近期纳斯达克(NDX)、半导体(SOX)及该基金的实际每日涨跌幅，通过多元线性回归测算基金经理真实的底仓暴露度。
+    本模块自动抓取 <b style='color:#d1d4dc;'>2025年5月起</b>（持仓调整后）的纳斯达克(NDX)、半导体(SOX)及该基金的实际每日涨跌幅，
+    通过多元线性回归测算基金经理真实的底仓暴露度。
     </p>
     """, unsafe_allow_html=True)
-    
+
     ols_data = fetch_ols_data()
-    
+
     if ols_data.empty:
         st.error("获取 OLS 回归数据失败，请检查网络。")
     else:
         col_table, col_model = st.columns([1.2, 1])
-        
+
         with col_table:
             st.markdown("**1. 数据清洗与校准** (已自动合并五一等假期错位，取消勾选可剔除极端值)")
-            
-            # 调整显示顺序，加入区间标签
+
             display_cols = ['交易区间', 'NDX', 'SOX', 'Fund', '是否纳入回归']
             edited_df = st.data_editor(
                 ols_data[display_cols].style.format("{:.2f}", subset=['NDX', 'SOX', 'Fund'], na_rep="空"),
@@ -672,10 +676,10 @@ with tab3:
                 },
                 use_container_width=True, height=300
             )
-        
+
         # 运行回归
         valid_data = edited_df[edited_df['是否纳入回归'] == True].dropna(subset=['NDX', 'SOX', 'Fund'])
-        
+
         with col_model:
             if len(valid_data) < 5:
                 st.warning("⚠️ 请至少保留 5 天的有效数据以运行回归模型。")
@@ -683,41 +687,45 @@ with tab3:
                 X = valid_data[['NDX', 'SOX']]
                 X = sm.add_constant(X)
                 y = valid_data['Fund']
-                
+
                 model = sm.OLS(y, X).fit()
                 alpha = model.params['const']
                 beta_ndx = model.params.get('NDX', 0)
                 beta_sox = model.params.get('SOX', 0)
-                
+
                 st.markdown("**2. 模型解析出来的真实底仓**")
                 st.info(f"**方程：** 基金收益 = {alpha:.2f}% + ({beta_ndx:.2f} × NDX) + ({beta_sox:.2f} × SOX)")
-                
+
                 c1, c2, c3 = st.columns(3)
                 c1.metric("纳指敞口 (Beta)", f"{beta_ndx:.2f}")
                 c2.metric("半导体敞口 (Beta)", f"{beta_sox:.2f}")
                 c3.metric("拟合度 (R²)", f"{model.rsquared:.2f}")
-                
+
         st.markdown("---")
         st.markdown("### 🎯 净值模拟器")
-        
+
         latest_dt, auto_ndx, auto_sox = get_latest_market_returns()
-        st.markdown(f"<p style='color:#787b86;font-size:0.85rem;'>🤖 已自动同步美股最新交易日 (<b>{latest_dt}</b>) 的真实收盘数据。你也可以在下方手动修改进行沙盘推演：</p>", unsafe_allow_html=True)
-        
+        st.markdown(
+            f"<p style='color:#787b86;font-size:0.85rem;'>🤖 已自动同步美股最新交易日 (<b>{latest_dt}</b>) 的真实收盘数据。"
+            f"你也可以在下方手动修改进行沙盘推演：</p>",
+            unsafe_allow_html=True
+        )
+
         pred_col1, pred_col2, pred_col3 = st.columns([1, 1, 1.5])
         with pred_col1:
             in_ndx = st.number_input("👉 当日 NDX 涨跌幅 (%)", value=round(auto_ndx, 2), step=0.1)
         with pred_col2:
             in_sox = st.number_input("👉 当日 SOX 涨跌幅 (%)", value=round(auto_sox, 2), step=0.1)
-            
+
         if len(valid_data) >= 5:
             pred_val = alpha + beta_ndx * in_ndx + beta_sox * in_sox
-            pred_se = np.sqrt(model.mse_resid) 
-            
+            pred_se = np.sqrt(model.mse_resid)
+
             with pred_col3:
                 st.markdown("**95% 置信区间预测结果：**")
                 st.metric(
-                    "核心预测值", 
-                    f"{pred_val:.2f}%", 
-                    f"波动范围: [{pred_val - 1.96*pred_se:.2f}%, {pred_val + 1.96*pred_se:.2f}%]", 
+                    "核心预测值",
+                    f"{pred_val:.2f}%",
+                    f"波动范围: [{pred_val - 1.96*pred_se:.2f}%, {pred_val + 1.96*pred_se:.2f}%]",
                     delta_color="off"
                 )
