@@ -667,7 +667,7 @@ with tab3:
     </p>
     """, unsafe_allow_html=True)
 
-    ols_data = fetch_ols_data()
+    ols_data = fetch_ols_data_v2()
 
     if ols_data.empty:
         st.error("获取 OLS 回归数据失败，请检查网络。")
