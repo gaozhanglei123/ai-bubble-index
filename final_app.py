@@ -266,17 +266,22 @@ def run_backtest(df_json: str) -> list[dict]:
 @st.cache_data(ttl=3600)
 def fetch_ols_data():
     try:
-        # ✅ 固定从2026年5月1日开始统计（新持仓起点，剔除之前持仓变动的干扰）
+        # ✅ 新持仓起点：2026年5月1日
         start_date = pd.Timestamp("2026-05-01")
         end_date = pd.Timestamp.today()
 
-        us_data = yf.download(['^NDX', '^SOX'], start=start_date, end=end_date)['Close']
+        # 多下载30天用于 pct_change 的基准，计算完后再硬过滤
+        download_start = start_date - pd.Timedelta(days=30)
+        us_data = yf.download(['^NDX', '^SOX'], start=download_start, end=end_date)['Close']
         us_pct = us_data.pct_change().dropna() * 100
         us_pct.columns = ['NDX', 'SOX']
         if us_pct.index.tz is not None:
             us_pct.index = us_pct.index.tz_localize(None)
 
-        # ✅ pageSize扩大到60，确保完整覆盖5月至今的所有净值数据
+        # ✅ 硬过滤：彻底删除 start_date 之前的所有美股行，防止4月数据漏入
+        us_pct = us_pct[us_pct.index >= start_date]
+
+        # ✅ pageSize=60，确保完整覆盖5月至今的所有净值数据
         url = "http://api.fund.eastmoney.com/f10/lsjz?fundCode=005698&pageIndex=1&pageSize=60"
         headers = {"Referer": "http://fundf10.eastmoney.com/"}
         res = requests.get(url, headers=headers, timeout=5).json()
